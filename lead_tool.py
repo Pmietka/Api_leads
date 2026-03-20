@@ -5,7 +5,7 @@ lead_tool.py — National Insulation Contractor Database Builder
 
 Searches the Google Places API (New) for insulation contractors across every
 US zip code and stores results in a local SQLite database with full resume
-support, monthly quota enforcement, and per-state / master CSV export.
+support and per-state / master CSV export.
 
 QUICK START
 -----------
@@ -13,18 +13,7 @@ QUICK START
 2.  pip install -r requirements.txt
 3.  python lead_tool.py --state illinois
     python lead_tool.py --state all --priority illinois,texas,florida
-    python lead_tool.py --state all --allow-paid --max-spend 50
     python lead_tool.py --export-only
-
-COST MODEL (Places API New, 2025)
-----------------------------------
-  Free tier : 5,000 Text Search requests / month (resets 1st of each month)
-  Paid tier : ~$32 per 1,000 requests after the free tier is exhausted
-  Each zip  : 1–3 API calls (1 call per page of 20 results, max 60 results)
-
-The tool stops automatically when the free quota is exhausted and resumes
-next month from where it left off.  Pass --allow-paid --max-spend <dollars>
-to continue into the paid tier with a hard dollar cap.
 
 See setup_guide.md for full Google Cloud setup instructions.
 """
@@ -33,7 +22,6 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -91,7 +79,6 @@ examples:
   python lead_tool.py --state illinois
   python lead_tool.py --state all --priority illinois,texas,florida
   python lead_tool.py --state all --refresh-days 180
-  python lead_tool.py --state all --allow-paid --max-spend 50
   python lead_tool.py --export-only
   python lead_tool.py --export-only --state illinois
 """,
@@ -126,23 +113,6 @@ examples:
         help=(
             "Re-search zip codes that were last searched more than N days ago "
             "(default: 180, use 0 to skip all previously searched zips)"
-        ),
-    )
-
-    # -- Cost controls --
-    parser.add_argument(
-        "--allow-paid",
-        action="store_true",
-        help="Allow searches beyond the 5,000 free-tier monthly quota (charges apply)",
-    )
-    parser.add_argument(
-        "--max-spend",
-        type=float,
-        default=50.0,
-        metavar="DOLLARS",
-        help=(
-            "Hard dollar cap on paid API calls when --allow-paid is set "
-            "(default: $50.00)"
         ),
     )
 
@@ -212,29 +182,6 @@ def _load_api_key() -> str:
     return key
 
 
-def _fmt_cost(dollars: float) -> str:
-    return f"${dollars:.2f}"
-
-
-def _print_quota_banner(stats: dict) -> None:
-    month_name = datetime(stats["year"], stats["month"], 1).strftime("%B %Y")
-    free_pct = min(100, stats["free_used"] * 100 // stats["free_limit"])
-    paid_info = ""
-    if stats["allow_paid"]:
-        paid_info = (
-            f" | Paid: {stats['paid_used']:,} calls "
-            f"({_fmt_cost(stats['estimated_cost'])} / "
-            f"{_fmt_cost(stats['max_spend'])} cap, "
-            f"{_fmt_cost(stats['spend_remaining'])} remaining)"
-        )
-    log.info(
-        f"[QUOTA {month_name}]  "
-        f"Free: {stats['free_used']:,} / {stats['free_limit']:,} "
-        f"({free_pct}% used, {stats['free_remaining']:,} remaining)"
-        + paid_info
-    )
-
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -259,7 +206,6 @@ def main() -> None:
         load_zipcodes,
         STATE_NAMES,
     )
-    from lib.quota import QuotaManager
     from lib.api_client import PlacesAPIClient
     from lib.exporter import export_all
 
@@ -354,35 +300,10 @@ def main() -> None:
     log.info(f"Pending zip codes : {len(pending):,}")
 
     # ------------------------------------------------------------------ #
-    # Initialise API client and quota manager                              #
+    # Initialise API client                                                #
     # ------------------------------------------------------------------ #
     api_key = _load_api_key()
     client = PlacesAPIClient(api_key, delay=args.delay)
-    quota = QuotaManager(
-        db_path,
-        allow_paid=args.allow_paid,
-        max_spend=args.max_spend,
-    )
-
-    _print_quota_banner(quota.get_stats())
-
-    # Pre-flight quota check
-    if not quota.can_make_calls(1):
-        stats = quota.get_stats()
-        log.warning(
-            "Monthly free quota is already exhausted "
-            f"({stats['free_used']:,}/{stats['free_limit']:,} calls used)."
-        )
-        if not args.allow_paid:
-            log.warning("  → Add --allow-paid --max-spend <dollars> to continue on the paid tier.")
-        else:
-            log.warning(
-                f"  → Max spend of {_fmt_cost(args.max_spend)} already reached "
-                f"({_fmt_cost(stats['estimated_cost'])} used)."
-            )
-        log.info("Exporting current results …")
-        export_all(db_path, args.export_dir, target_states if state_arg != "all" else None)
-        return
 
     # ------------------------------------------------------------------ #
     # Main search loop                                                     #
@@ -390,6 +311,7 @@ def main() -> None:
     total_leads = get_lead_count(db_path)
     new_leads_run = 0
     zips_processed = 0
+    total_calls_run = 0
     current_state: str = ""
 
     log.info("")
@@ -416,27 +338,6 @@ def main() -> None:
                     f"│ {state_leads_so_far:,} leads so far ───"
                 )
 
-            # -- Quota check before each call ----------------------------
-            if not quota.can_make_calls(1):
-                stats = quota.get_stats()
-                log.warning("")
-                log.warning("Quota limit reached — stopping search loop.")
-                if args.allow_paid:
-                    log.warning(
-                        f"  Max spend of {_fmt_cost(args.max_spend)} reached "
-                        f"({_fmt_cost(stats['estimated_cost'])} used)."
-                    )
-                else:
-                    log.warning(
-                        f"  Free tier exhausted "
-                        f"({stats['free_used']:,}/{stats['free_limit']:,} calls)."
-                    )
-                    log.warning(
-                        "  Add --allow-paid --max-spend <dollars> to continue, "
-                        "or re-run next month."
-                    )
-                break
-
             # -- API call ------------------------------------------------
             try:
                 places, call_count = client.search_zip(
@@ -450,8 +351,7 @@ def main() -> None:
                 mark_zip_searched(db_path, zip_code, 0, error=str(exc))
                 continue
 
-            # -- Record quota usage --------------------------------------
-            quota.record_calls(call_count)
+            total_calls_run += call_count
 
             # -- Store unique leads in database --------------------------
             new_for_zip = 0
@@ -465,18 +365,12 @@ def main() -> None:
             zips_processed += 1
 
             # -- Progress line -------------------------------------------
-            stats = quota.get_stats()
             zips_left = len(pending) - zips_processed
             log.info(
                 f"  [{zip_code}] {state}  "
                 f"│ +{new_for_zip:2d} new  "
                 f"│ total {total_leads:,}  "
-                f"│ free left {stats['free_remaining']:,}  "
-                + (
-                    f"│ cost {_fmt_cost(stats['estimated_cost'])}  "
-                    if args.allow_paid else ""
-                )
-                + f"│ zips left {zips_left:,}"
+                f"│ zips left {zips_left:,}"
             )
 
     except KeyboardInterrupt:
@@ -492,7 +386,7 @@ def main() -> None:
     log.info(f"  Zips searched this run : {zips_processed:,}")
     log.info(f"  New leads this run     : {new_leads_run:,}")
     log.info(f"  Total leads in DB      : {total_leads:,}")
-    _print_quota_banner(quota.get_stats())
+    log.info(f"  API calls this run     : {total_calls_run:,}")
     log.info("")
     log.info("Exporting CSVs …")
 
