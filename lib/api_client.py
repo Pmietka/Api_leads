@@ -155,11 +155,11 @@ class PlacesAPIClient:
                 break
 
             # Mandatory pause before requesting next page.
-            # IMPORTANT: page_token requests must contain ONLY the pageToken —
-            # sending any other field (textQuery, pageSize, locationBias) causes
-            # a 400 "parameters must match initial request" error.
+            # Keep all original fields (textQuery, pageSize, locationBias) and
+            # add pageToken — the API requires paging params to match the initial
+            # request, so replacing the body causes a 400 INVALID_ARGUMENT.
             time.sleep(INTER_PAGE_DELAY)
-            body = {"pageToken": next_token}
+            body["pageToken"] = next_token
 
         # Polite delay between zip searches
         time.sleep(self.delay)
