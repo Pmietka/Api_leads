@@ -1,12 +1,12 @@
 """
-US zip code data loader using the `uszipcode` package.
+US zip code data loader using the `zipcodes` package.
 
-The uszipcode library ships with a bundled SQLite database of all US zip
-codes including latitude, longitude, population, and type.  The database
-is downloaded automatically on first use (~3 MB).
+The zipcodes library ships with a bundled dataset of all US zip codes
+including latitude, longitude, population (IRS estimate), and type.
+No database download required — data is included in the package itself.
 
 Filtering applied:
-  - Exclude PO Box-only zip codes (zipcode_type == 'PO BOX')
+  - Exclude PO Box-only zip codes (zip_code_type == 'PO BOX')
   - Exclude zips with known population below `min_population` (default 500)
   - Exclude zips without valid lat/lon coordinates
   - Exclude non-continental territories (only 50 states + DC)
@@ -64,8 +64,8 @@ def normalize_state(state_input: str) -> Optional[str]:
 
     Examples
     --------
-    >>> normalize_state("illinois")   → "IL"
-    >>> normalize_state("IL")         → "IL"
+    >>> normalize_state("washington") → "WA"
+    >>> normalize_state("WA")         → "WA"
     >>> normalize_state("New York")   → "NY"
     """
     s = state_input.strip()
@@ -116,14 +116,14 @@ def load_zipcodes(
 
     Each returned dict has keys: zip_code, state, latitude, longitude.
 
-    Raises ImportError if uszipcode is not installed.
+    Raises ImportError if zipcodes is not installed.
     """
     try:
-        from uszipcode import SearchEngine  # type: ignore
+        import zipcodes as zc  # type: ignore
     except ImportError:
         raise ImportError(
-            "The 'uszipcode' package is required.\n"
-            "Install it with:  pip install uszipcode"
+            "The 'zipcodes' package is required.\n"
+            "Install it with:  pip install zipcodes"
         )
 
     target_states = states or list(STATE_NAMES.keys())
@@ -137,39 +137,43 @@ def load_zipcodes(
         f"(min_population={min_population}) …"
     )
 
-    search = SearchEngine()
-
     for state_abbr in target_states:
         try:
-            # returns=0 → no LIMIT clause in the underlying SQL → all results
-            zips = search.by_state(state_abbr, returns=0)
+            state_zips = zc.filter_by(state=state_abbr)
         except Exception as exc:
             log.warning(f"Could not load zip codes for {state_abbr}: {exc}")
             continue
 
-        for z in zips:
-            zip_type = getattr(z, "zipcode_type", "STANDARD") or "STANDARD"
-            if zip_type == "PO BOX":
+        for z in state_zips:
+            # Filter PO Box zips
+            if z.get("zip_code_type") == "PO BOX":
                 skipped_po_box += 1
                 continue
 
-            if not z.lat or not z.lng:
+            # Validate coordinates
+            raw_lat = z.get("lat")
+            raw_lng = z.get("long")
+            if not raw_lat or not raw_lng:
+                skipped_no_coords += 1
+                continue
+            try:
+                lat = float(raw_lat)
+                lng = float(raw_lng)
+            except (TypeError, ValueError):
                 skipped_no_coords += 1
                 continue
 
-            pop = z.population or 0
-            # Only filter on population when we have a known value above 0
-            # (many zips have NULL population — we include them rather than
-            #  risk missing real areas)
+            # Population filter — only applied when a non-zero value is known
+            pop = z.get("irs_estimated_population") or 0
             if pop > 0 and pop < min_population:
                 skipped_population += 1
                 continue
 
             results.append({
-                "zip_code":  z.zipcode,
-                "state":     z.state,
-                "latitude":  float(z.lat),
-                "longitude": float(z.lng),
+                "zip_code":  z["zip_code"],
+                "state":     z["state"],
+                "latitude":  lat,
+                "longitude": lng,
             })
 
     log.info(
