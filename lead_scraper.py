@@ -280,9 +280,11 @@ def search_places(
         "X-Goog-Api-Key": api_key,
         "X-Goog-FieldMask": FIELD_MASK,
     }
-    body: dict = {"textQuery": query, "pageSize": 20}
+    # When paging, the body must contain ONLY the pageToken — no other fields.
     if page_token:
-        body["pageToken"] = page_token
+        body: dict = {"pageToken": page_token}
+    else:
+        body = {"textQuery": query, "pageSize": 20}
 
     for attempt in range(3):  # up to 3 attempts per call
         try:
