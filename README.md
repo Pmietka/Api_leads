@@ -78,7 +78,7 @@ illinois_leads.csv
 ### 1. Clone or download this repository
 
 ```bash
-git clone <https://github.com/Pmietka/Api_leads.git>
+git clone https://github.com/Pmietka/Api_leads.git
 cd Api_leads
 ```
 
