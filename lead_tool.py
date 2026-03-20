@@ -12,6 +12,7 @@ QUICK START
 1.  Copy .env.example → .env and add your Google Places API key.
 2.  pip install -r requirements.txt
 3.  python lead_tool.py --state illinois
+    python lead_tool.py --state illinois,texas,florida,washington
     python lead_tool.py --state all --priority illinois,texas,florida
     python lead_tool.py --export-only
 
@@ -77,6 +78,7 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog="""
 examples:
   python lead_tool.py --state illinois
+  python lead_tool.py --state illinois,texas,florida,washington
   python lead_tool.py --state all --priority illinois,texas,florida
   python lead_tool.py --state all --refresh-days 180
   python lead_tool.py --export-only
@@ -90,8 +92,9 @@ examples:
         default="all",
         metavar="STATE",
         help=(
-            "State name or two-letter abbreviation to search, "
-            "or 'all' for all 50 states + DC (default: all)"
+            "State(s) to search: a single name/abbreviation, a comma-separated "
+            "list (searched in order), or 'all' for all 50 states + DC "
+            "(default: all).  Example: --state illinois,texas,florida"
         ),
     )
     parser.add_argument(
@@ -225,10 +228,11 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     # Resolve which state(s) to operate on                                #
     # ------------------------------------------------------------------ #
-    state_arg = args.state.strip().lower()
+    states_raw = [s.strip() for s in args.state.split(",") if s.strip()]
     priority_raw = [s.strip() for s in args.priority.split(",") if s.strip()]
 
-    if state_arg == "all":
+    if len(states_raw) == 1 and states_raw[0].lower() == "all":
+        # All states, optionally reordered by --priority
         priority_states = [s for s in priority_raw if normalize_state(s)]
         invalid_priority = [s for s in priority_raw if not normalize_state(s)]
         if invalid_priority:
@@ -239,22 +243,29 @@ def main() -> None:
             + (f" | Priority: {', '.join(priority_states)}" if priority_states else "")
         )
     else:
-        norm = normalize_state(state_arg)
-        if not norm:
-            log.error(
-                f"Unknown state: '{args.state}'.\n"
-                "Use a full state name (e.g. illinois) or two-letter abbreviation (e.g. IL)."
-            )
-            sys.exit(1)
-        target_states = [norm]
-        log.info(f"Scope    : {STATE_NAMES.get(norm, norm)} ({norm})")
+        # Explicit list (one or more states) — searched in the order given
+        target_states = []
+        for raw in states_raw:
+            norm = normalize_state(raw)
+            if not norm:
+                log.error(
+                    f"Unknown state: '{raw}'.\n"
+                    "Use full state names (e.g. illinois) or two-letter abbreviations (e.g. IL)."
+                )
+                sys.exit(1)
+            if norm not in target_states:
+                target_states.append(norm)
+        names = ", ".join(f"{STATE_NAMES.get(s, s)} ({s})" for s in target_states)
+        log.info(f"Scope    : {names}")
 
     # ------------------------------------------------------------------ #
     # Export-only shortcut                                                 #
     # ------------------------------------------------------------------ #
+    all_states_mode = len(states_raw) == 1 and states_raw[0].lower() == "all"
+
     if args.export_only:
         log.info("Export-only mode: writing CSVs from existing database …")
-        export_states = target_states if state_arg != "all" else None
+        export_states = target_states if not all_states_mode else None
         exports = export_all(db_path, args.export_dir, export_states)
         n_state_files = len(exports) - 1
         log.info(
@@ -294,7 +305,7 @@ def main() -> None:
             f"  → Use --export-only to regenerate CSVs."
         )
         log.info("Exporting current results …")
-        export_all(db_path, args.export_dir, target_states if state_arg != "all" else None)
+        export_all(db_path, args.export_dir, target_states if not all_states_mode else None)
         return
 
     log.info(f"Pending zip codes : {len(pending):,}")
@@ -390,7 +401,7 @@ def main() -> None:
     log.info("")
     log.info("Exporting CSVs …")
 
-    export_states = target_states if state_arg != "all" else None
+    export_states = target_states if not all_states_mode else None
     exports = export_all(db_path, args.export_dir, export_states)
 
     n_state_files = len(exports) - 1
