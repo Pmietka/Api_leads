@@ -106,6 +106,55 @@ class PlacesAPIClient:
         raise RuntimeError("All retries exhausted for Places API request.")
 
     # ------------------------------------------------------------------
+    # Internal: paginate one query around a lat/lng point
+    # ------------------------------------------------------------------
+
+    def _search_single_query(
+        self,
+        text_query: str,
+        source_id: str,
+        latitude: float,
+        longitude: float,
+        radius_meters: float,
+    ) -> Tuple[List[Dict], int]:
+        """
+        Run one textQuery with location bias and paginate up to MAX_PAGES.
+        Returns (places, api_call_count).
+        """
+        all_places: List[Dict] = []
+        call_count = 0
+
+        body: Dict = {
+            "textQuery": text_query,
+            "pageSize":  PAGE_SIZE,
+            "locationBias": {
+                "circle": {
+                    "center": {"latitude": latitude, "longitude": longitude},
+                    "radius": radius_meters,
+                }
+            },
+        }
+
+        for _ in range(MAX_PAGES):
+            response = self._post(body)
+            call_count += 1
+
+            raw_places = response.get("places", [])
+            for place in raw_places:
+                parsed = self._parse_place(place, source_id)
+                if parsed:
+                    all_places.append(parsed)
+
+            next_token = response.get("nextPageToken")
+            if not next_token or not raw_places:
+                break
+
+            time.sleep(INTER_PAGE_DELAY)
+            body["pageToken"] = next_token
+
+        return all_places, call_count
+
+    # ------------------------------------------------------------------
     # Public: search one zip code
     # ------------------------------------------------------------------
 
@@ -125,45 +174,48 @@ class PlacesAPIClient:
             places          – list of parsed lead dicts
             api_call_count  – number of HTTP requests made (for quota tracking)
         """
-        all_places: List[Dict] = []
-        call_count = 0
-
-        # First page: include location bias
-        body: Dict = {
-            "textQuery": SEARCH_TERM,
-            "pageSize":  PAGE_SIZE,
-            "locationBias": {
-                "circle": {
-                    "center": {"latitude": latitude, "longitude": longitude},
-                    "radius": radius_meters,
-                }
-            },
-        }
-
-        for page_num in range(MAX_PAGES):
-            response = self._post(body)
-            call_count += 1
-
-            raw_places = response.get("places", [])
-            for place in raw_places:
-                parsed = self._parse_place(place, zip_code)
-                if parsed:
-                    all_places.append(parsed)
-
-            next_token = response.get("nextPageToken")
-            if not next_token or not raw_places:
-                break
-
-            # Mandatory pause before requesting next page.
-            # Keep all original fields (textQuery, pageSize, locationBias) and
-            # add pageToken — the API requires paging params to match the initial
-            # request, so replacing the body causes a 400 INVALID_ARGUMENT.
-            time.sleep(INTER_PAGE_DELAY)
-            body["pageToken"] = next_token
-
-        # Polite delay between zip searches
+        places, call_count = self._search_single_query(
+            SEARCH_TERM, zip_code, latitude, longitude, radius_meters
+        )
         time.sleep(self.delay)
-        return all_places, call_count
+        return places, call_count
+
+    # ------------------------------------------------------------------
+    # Public: search one grid point (multiple queries)
+    # ------------------------------------------------------------------
+
+    def search_grid_point(
+        self,
+        point_id: str,
+        latitude: float,
+        longitude: float,
+        queries: List[str],
+        radius_meters: float = 20_000,
+    ) -> Tuple[List[Dict], int]:
+        """
+        Run multiple textQuery searches centred on a lat/lng grid point.
+        Deduplicates results by place_id within this grid point.
+
+        Returns
+        -------
+        (all_places, total_api_call_count)
+        """
+        seen_ids: set = set()
+        all_places: List[Dict] = []
+        total_calls = 0
+
+        for query in queries:
+            places, calls = self._search_single_query(
+                query, point_id, latitude, longitude, radius_meters
+            )
+            total_calls += calls
+            for place in places:
+                if place["place_id"] not in seen_ids:
+                    seen_ids.add(place["place_id"])
+                    all_places.append(place)
+            time.sleep(self.delay)
+
+        return all_places, total_calls
 
     # ------------------------------------------------------------------
     # Parse a single place object
