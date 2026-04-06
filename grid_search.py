@@ -72,8 +72,9 @@ DEFAULT_STATES = list(STATE_BBOXES.keys())
 DEFAULT_DB_PATH = "grid_leads.db"
 DEFAULT_EXPORT_DIR = "exports"
 DEFAULT_SPACING_MILES = 20.0
-DEFAULT_DENSE_SPACING_MILES = 10.0
+DEFAULT_DENSE_SPACING_MILES = 5.0
 DEFAULT_RADIUS_METERS = 20_000
+DEFAULT_DENSE_RADIUS_METERS = 10_000
 DEFAULT_DELAY = 0.3
 
 log = logging.getLogger(__name__)
@@ -204,7 +205,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--radius", type=float, default=DEFAULT_RADIUS_METERS, metavar="METERS",
-        help=f"Search radius per grid point in meters (default: {DEFAULT_RADIUS_METERS})",
+        help=f"Search radius for base grid points in meters (default: {DEFAULT_RADIUS_METERS})",
+    )
+    p.add_argument(
+        "--dense-radius", type=float, default=DEFAULT_DENSE_RADIUS_METERS, metavar="METERS",
+        help=f"Search radius for urban/dense grid points in meters (default: {DEFAULT_DENSE_RADIUS_METERS})",
     )
     p.add_argument(
         "--refresh-days", type=int, default=0, metavar="N",
@@ -304,8 +309,8 @@ def main() -> None:
         est_total = total * len(GRID_SEARCH_QUERIES) * 3
         print("-" * 44)
         print(f"{'TOTAL':<6}  {total:>12,}  {est_total:>22,}")
-        print(f"\nRadius per point: {args.radius:,.0f} m  |  "
-              f"Base spacing: {args.spacing} mi  |  Dense spacing: {args.dense_spacing} mi\n")
+        print(f"\nBase:  {args.spacing} mi spacing, {args.radius:,.0f} m radius")
+        print(f"Dense: {args.dense_spacing} mi spacing, {args.dense_radius:,.0f} m radius\n")
         return
 
     # ----------------------------------------------------------------
@@ -384,12 +389,13 @@ def main() -> None:
                 log.info(f"{'='*60}")
 
             try:
+                radius = args.dense_radius if point["is_dense"] else args.radius
                 places, call_count = client.search_grid_point(
                     point["point_id"],
                     point["latitude"],
                     point["longitude"],
                     queries=GRID_SEARCH_QUERIES,
-                    radius_meters=args.radius,
+                    radius_meters=radius,
                 )
             except PermissionError as exc:
                 log.error(f"Permission error — aborting:\n{exc}")
