@@ -243,6 +243,120 @@ def get_states_with_leads(db_path: str) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
+# Grid point helpers (grid_search.py)
+# ---------------------------------------------------------------------------
+
+def init_grid_db(db_path: str) -> None:
+    """Create all standard tables plus the grid_points table."""
+    init_db(db_path)
+    conn = _connect(db_path)
+    with conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS grid_points (
+                point_id     TEXT PRIMARY KEY,
+                state        TEXT NOT NULL,
+                latitude     REAL NOT NULL,
+                longitude    REAL NOT NULL,
+                is_dense     INTEGER DEFAULT 0,
+                searched_at  TIMESTAMP,
+                result_count INTEGER DEFAULT 0,
+                new_count    INTEGER DEFAULT 0,
+                status       TEXT DEFAULT 'pending'
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_grid_state_status
+                ON grid_points(state, status);
+        """)
+    conn.close()
+
+
+def populate_grid_points(db_path: str, point_list: List[Dict]) -> int:
+    """
+    Bulk-insert grid points that do not yet exist in the database.
+    Returns the number of newly inserted rows.
+    """
+    conn = _connect(db_path)
+    before = conn.execute("SELECT COUNT(*) FROM grid_points").fetchone()[0]
+    with conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO grid_points "
+            "(point_id, state, latitude, longitude, is_dense) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [(p["point_id"], p["state"], p["latitude"], p["longitude"], p["is_dense"])
+             for p in point_list],
+        )
+    after = conn.execute("SELECT COUNT(*) FROM grid_points").fetchone()[0]
+    conn.close()
+    return after - before
+
+
+def get_pending_grid_points(
+    db_path: str,
+    states_ordered: List[str],
+    refresh_days: int,
+) -> List[Dict]:
+    """
+    Return unsearched (or stale) grid points in the given state order.
+
+    refresh_days=0  → only return points that have never been searched
+    refresh_days>0  → also return points last searched more than N days ago
+    """
+    conn = _connect(db_path)
+    result: List[Dict] = []
+    for state in states_ordered:
+        rows = conn.execute(
+            """
+            SELECT point_id, state, latitude, longitude, is_dense
+            FROM   grid_points
+            WHERE  state = ?
+              AND  (
+                      searched_at IS NULL
+                   OR (? > 0 AND searched_at < datetime('now', '-' || ? || ' days'))
+                   )
+            ORDER  BY latitude, longitude
+            """,
+            (state, refresh_days, refresh_days),
+        ).fetchall()
+        result.extend(dict(r) for r in rows)
+    conn.close()
+    return result
+
+
+def mark_grid_point_searched(
+    db_path: str,
+    point_id: str,
+    result_count: int,
+    new_count: int,
+    error: Optional[str] = None,
+) -> None:
+    """Record that a grid point search has been completed (or failed)."""
+    conn = _connect(db_path)
+    with conn:
+        conn.execute(
+            """
+            UPDATE grid_points
+            SET    searched_at  = datetime('now'),
+                   result_count = ?,
+                   new_count    = ?,
+                   status       = ?
+            WHERE  point_id = ?
+            """,
+            (result_count, new_count, "error" if error else "completed", point_id),
+        )
+    conn.close()
+
+
+def count_grid_points_by_state(db_path: str) -> Dict[str, int]:
+    """Return {state_abbr: point_count} for all states in the database."""
+    conn = _connect(db_path)
+    rows = conn.execute(
+        "SELECT state, COUNT(*) AS cnt FROM grid_points GROUP BY state"
+    ).fetchall()
+    conn.close()
+    return {r["state"]: r["cnt"] for r in rows}
+
+
+# ---------------------------------------------------------------------------
 # API usage / quota helpers
 # ---------------------------------------------------------------------------
 

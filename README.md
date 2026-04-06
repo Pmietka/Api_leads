@@ -1,7 +1,9 @@
-# Lead Scraper — Home Insulation Contractor Lead Generation
+# Grid Search Lead Generator — Home Insulation Contractors
 **Appointly Solutions** | Powered by Google Places API (New)
 
-A command-line tool that finds every home insulation contractor in a US state, organized county-by-county, and exports them to a clean, deduplicated CSV file ready for outreach.
+A command-line tool that finds every home insulation contractor across 5 high-value
+Northeast/Midwest states using a lat/lng grid search, then exports them to clean,
+deduplicated CSV files ready for outreach.
 
 ---
 
@@ -18,58 +20,49 @@ A command-line tool that finds every home insulation contractor in a US state, o
 9. [How It Works](#how-it-works)
 10. [Resume / Fault Tolerance](#resume--fault-tolerance)
 11. [API Costs & Rate Limits](#api-costs--rate-limits)
-12. [County Count by State](#county-count-by-state)
-13. [Troubleshooting](#troubleshooting)
-14. [File Structure](#file-structure)
+12. [Troubleshooting](#troubleshooting)
+13. [File Structure](#file-structure)
 
 ---
 
 ## What It Does
 
-Given a US state name, this tool:
+This tool covers **MA, CT, NJ, PA, and MI** — five cold-climate states with old
+housing stock and strong insulation demand. Instead of searching by ZIP code
+(which returns the same ranked results repeatedly), it:
 
-1. Fetches the complete list of every county/parish in that state from the US Census Bureau (free, no key needed)
-2. For each county, runs **8 targeted search queries** against the Google Places API (New):
-   - `home insulation contractor`
+1. Lays a **uniform lat/lng grid** across each state — one search point every ~20 miles
+2. Applies a **denser 10-mile grid** over major metro areas (Boston, Hartford, New Haven,
+   Newark, Philadelphia, Pittsburgh, Detroit, Grand Rapids)
+3. For **each grid point**, runs 3 targeted search queries against the Google Places API (New):
+   - `insulation contractor`
+   - `insulation`
    - `spray foam insulation`
-   - `blown in insulation`
-   - `attic insulation`
-   - `insulation installation`
-   - `cellulose insulation`
-   - `fiberglass batt insulation`
-   - `insulation company`
-3. Collects for every business found:
-   - Business Name
-   - Phone Number
-   - Website URL
-   - Full Address
-   - Google Rating (1–5)
-   - Total Review Count
-4. Deduplicates across all county and query combinations using Google's unique Place ID
-5. Handles pagination automatically (each query can return up to 60 results across 3 pages)
-6. Saves progress after every county — safe to interrupt and resume at any time
-7. Exports everything to a single clean CSV named `{state}_leads.csv`
+4. **Paginates** each query automatically (up to 3 pages × 20 results = 60 results per query)
+5. **Deduplicates** every result by Google Place ID — each business appears exactly once
+6. Saves progress in **SQLite** after every grid point — safe to interrupt and resume
+7. Exports per-state **CSV files** plus a combined master CSV
 
 ---
 
 ## Output Example
 
 ```
-illinois_leads.csv
+exports/ma_leads.csv
 ```
 
-| business_name | phone | website | address | rating | review_count | source_county | place_id |
-|---|---|---|---|---|---|---|---|
-| ABC Insulation LLC | (312) 555-0100 | https://abcinsulation.com | 123 Main St, Chicago, IL 60601 | 4.8 | 127 | Cook County | ChIJxxx... |
-| Midwest Spray Foam | (217) 555-0199 | | 456 Oak Ave, Springfield, IL 62701 | 4.5 | 43 | Sangamon County | ChIJyyy... |
+| business_name | phone | website | formatted_address | city | state | zip_code | rating | review_count | source_zip | place_id |
+|---|---|---|---|---|---|---|---|---|---|---|
+| New England Spray Foam | (617) 555-0100 | https://nesprayfoam.com | 123 Main St, Boston, MA 02101 | Boston | MA | 02101 | 4.8 | 94 | MA_42.3600_-71.0600 | ChIJxxx... |
+| CT Insulation Pros | (860) 555-0199 | | 45 Oak Ave, Hartford, CT 06101 | Hartford | CT | 06101 | 4.5 | 31 | CT_41.7600_-72.6800 | ChIJyyy... |
 
 ---
 
 ## Requirements
 
-- Python **3.10** or newer (uses `str | None` union type syntax)
+- Python **3.10** or newer
 - A Google Cloud account with billing enabled
-- Internet access (for the Places API and Census Bureau county data)
+- Internet access
 
 ---
 
@@ -100,123 +93,141 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-The only two packages needed are:
-- `requests` — HTTP calls to Google Places API and Census Bureau
-- `python-dotenv` — reads your API key from the `.env` file
+Two packages are required: `requests` (HTTP calls) and `python-dotenv` (reads your API key from `.env`).
 
 ---
 
 ## Google Cloud API Setup
 
-This is a one-time setup. It takes about 5 minutes.
+One-time setup — takes about 5 minutes.
 
 ### Step 1 — Create a Google Cloud Project
 
 1. Go to [https://console.cloud.google.com](https://console.cloud.google.com)
 2. Click the project dropdown at the top → **New Project**
 3. Give it a name (e.g. `appointly-lead-scraper`) and click **Create**
-4. Make sure the new project is selected in the dropdown
 
 ### Step 2 — Enable the Places API (New)
 
-> **Important:** There are two Places APIs in Google Cloud. You need the one labeled **(New)** — the legacy version uses a different endpoint and will not work.
+> **Important:** There are two Places APIs. You need the one labeled **(New)** —
+> the legacy version uses a different endpoint and will not work.
 
-1. In the left sidebar, go to **APIs & Services → Library**
+1. Go to **APIs & Services → Library**
 2. Search for **`Places API (New)`**
-3. Click on it and press **Enable**
+3. Click it and press **Enable**
 
 ### Step 3 — Enable Billing
 
-The Places API requires a billing account even though the first $200/month is free (see [API Costs](#api-costs--rate-limits) below).
+The API requires a billing account even though the first $200/month is free.
 
 1. Go to **Billing** in the left sidebar
-2. Link a credit card or payment method to your project
-3. Recommended: set a **budget alert** (e.g. $10/month) under **Billing → Budgets & Alerts** so you're notified before any significant charges
+2. Link a credit card or payment method
+3. Recommended: set a **budget alert** at $10 under **Billing → Budgets & Alerts**
 
 ### Step 4 — Create an API Key
 
 1. Go to **APIs & Services → Credentials**
 2. Click **+ Create Credentials → API Key**
-3. Copy the generated key — you'll need it in the next step
+3. Copy the generated key
 
-### Step 5 — Restrict the API Key (Security Best Practice)
+### Step 5 — Restrict the API Key (recommended)
 
 1. Click **Edit API Key** on the key you just created
 2. Under **API restrictions**, select **Restrict key**
-3. In the dropdown, choose **Places API (New)**
+3. Choose **Places API (New)** from the dropdown
 4. Click **Save**
-
-This ensures the key cannot be used for any other Google service even if it were ever exposed.
 
 ---
 
 ## Configuration
 
-### Create your `.env` file
-
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` in any text editor and replace the placeholder with your real key:
+Open `.env` and replace the placeholder with your real key:
 
 ```
 GOOGLE_PLACES_API_KEY=AIzaSyABC123yourrealkeyhere
 ```
 
-The `.env` file is read automatically at startup. Never commit this file to source control — it contains your private API key.
+Never commit `.env` to source control — it contains your private API key.
 
 ---
 
 ## Usage
 
-### Basic usage
+### Preview grid coverage without making API calls
 
 ```bash
-python lead_scraper.py --state illinois
+python grid_search.py --dry-run
 ```
+
+```
+State    Grid Points    Est. API Calls (max)
+--------------------------------------------
+MA                84                     756
+CT                35                     315
+NJ                74                     666
+PA               199                   1,791
+MI               443                   3,987
+--------------------------------------------
+TOTAL            835                   7,515
+```
+
+### Run all 5 states
 
 ```bash
-python lead_scraper.py --state "new york"
+python grid_search.py
 ```
+
+### Run a single state
 
 ```bash
-python lead_scraper.py --state texas
+python grid_search.py --states MA
+python grid_search.py --states PA,MI
 ```
 
-State names are **case-insensitive** and should be the full English name. Both `Illinois` and `illinois` work.
+### Export CSVs without making API calls
+
+```bash
+python grid_search.py --export-only
+```
+
+### Resume after interruption
+
+Just re-run the same command — already-searched grid points are skipped automatically.
 
 ### Slower request rate (if you hit quota limits)
 
 ```bash
-python lead_scraper.py --state california --delay 1.5
-```
-
-### Ignore saved progress and restart from scratch
-
-```bash
-python lead_scraper.py --state illinois --fresh
+python grid_search.py --delay 1.0
 ```
 
 ### Example console output
 
 ```
-2026-03-20 10:00:01  INFO     Fetching county list from Census Bureau for Illinois (FIPS 17)…
-2026-03-20 10:00:02  INFO     Found 102 counties/parishes in Illinois.
-2026-03-20 10:00:02  INFO     Starting scrape for Illinois | 102 total counties | 0 already done | 102 remaining | Delay: 0.8s
-2026-03-20 10:00:02  INFO     Output file: illinois_leads.csv
+2026-04-06 10:00:01  INFO     Added 835 new grid points to database.
 
-2026-03-20 10:00:02  INFO     [1/102] Processing: Adams County, Illinois
-2026-03-20 10:00:06  INFO       → 14 new leads found (running total: 14)
-2026-03-20 10:00:07  INFO     [2/102] Processing: Alexander County, Illinois
-2026-03-20 10:00:11  INFO       → 3 new leads found (running total: 17)
-...
-2026-03-20 12:47:33  INFO     ============================================================
-2026-03-20 12:47:33  INFO       SCRAPE COMPLETE — Illinois
-2026-03-20 12:47:33  INFO       New leads this run : 1,847
-2026-03-20 12:47:33  INFO       Total leads in CSV : 1,847
-2026-03-20 12:47:33  INFO       Output file        : /home/user/Api_leads/illinois_leads.csv
-2026-03-20 12:47:33  INFO     ============================================================
+============================================================
+  State: MA  (84 total grid points)
+============================================================
+  [    1/835] MA_41.2300_-73.5100  results=12  new=12  api_calls=3  total_new=12
+  [    2/835] MA_41.2300_-73.1474  results=8   new=6   api_calls=2  total_new=18
+  ...
+  [MA] done — 84 points, 312 new leads
+
+============================================================
+  State: CT  (35 total grid points)
+============================================================
+  ...
+
+Search complete — 1,204 new leads added, 4,312 API calls made.
+Exporting CSVs to exports/
+  exports/ma_leads.csv  (312 leads)
+  exports/ct_leads.csv  (187 leads)
+  ...
+  exports/all_leads_master.csv  (1,204 total leads — master)
 ```
 
 ---
@@ -225,91 +236,92 @@ python lead_scraper.py --state illinois --fresh
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `--state` | string | *(required)* | Full US state name, e.g. `illinois` or `"new york"` |
-| `--delay` | float | `0.8` | Seconds to wait between API queries within a county. Increase to `1.5`–`2.0` if you hit 429 rate limit errors. |
-| `--fresh` | flag | off | Ignore any saved progress file and restart the entire state from county 1. The existing CSV is overwritten. |
+| `--states` | string | `MA,CT,NJ,PA,MI` | Comma-separated state abbreviations to search |
+| `--spacing` | float | `20.0` | Base grid spacing in miles |
+| `--dense-spacing` | float | `10.0` | Grid spacing in miles for urban metro zones |
+| `--radius` | float | `20000` | Search radius per grid point in meters |
+| `--refresh-days` | int | `0` | Re-search grid points older than N days (0 = never) |
+| `--export-only` | flag | off | Skip API calls, export CSVs from existing database |
+| `--export-dir` | string | `exports/` | Directory for output CSV files |
+| `--db-path` | string | `grid_leads.db` | SQLite database file path |
+| `--delay` | float | `0.3` | Seconds to wait between API queries |
+| `--dry-run` | flag | off | Print grid point counts per state and exit |
+| `--state-summary` | flag | off | Print lead counts per state from database and exit |
 
 ---
 
 ## How It Works
 
-### County data
+### Grid generation
 
-On first run for a state, the tool calls the **US Census Bureau API** (completely free, no key required) to get a full list of every county or county-equivalent (parishes in Louisiana, boroughs in Alaska, etc.). The result is cached to `data/{state}_counties.json` so subsequent runs don't need to re-fetch it.
+The tool divides each state into a rectangular bounding box and places search
+points on a uniform grid. Latitude step is constant (`spacing_miles / 69`);
+longitude step varies by latitude to keep true distance spacing consistent
+(`spacing_miles / (69 × cos(lat))`).
 
-### Search strategy
+Urban metro areas get a denser sub-grid at half the base spacing. Metro zones
+are defined by center coordinates and radius:
 
-For each county, 8 distinct search queries are fired at the **Google Places API (New) Text Search** endpoint. Using multiple query terms is important because not all businesses self-describe the same way — a spray foam specialist may not appear in a generic "insulation contractor" search.
+| State | Metro zones |
+|-------|-------------|
+| MA | Boston (30 mi), Worcester (20 mi) |
+| CT | Hartford (20 mi), New Haven (20 mi) |
+| NJ | Newark/NYC border (30 mi), Camden/Philadelphia border (25 mi) |
+| PA | Philadelphia (40 mi), Pittsburgh (35 mi) |
+| MI | Detroit (40 mi), Grand Rapids (20 mi) |
 
-Queries are formatted as:
-```
-spray foam insulation in Cook County, Illinois
-```
+Each point gets a stable ID (`STATE_lat_lng`, e.g. `MA_42.3600_-71.0600`) used
+for resume tracking.
+
+### Search queries
+
+Three queries run per grid point:
+
+1. `insulation contractor` — catches full-service companies
+2. `insulation` — broader net for businesses that self-describe simply
+3. `spray foam insulation` — catches specialty contractors who may not appear in generic searches
+
+Different businesses use different terminology on Google Maps, so running all
+three queries significantly increases recall.
 
 ### Pagination
 
-Each query can return up to 20 results. If a `nextPageToken` is present in the response, the tool automatically fetches the next page (up to 3 pages = 60 results per query) with a 2-second delay between pages as required by Google.
+Each query returns up to 20 results. If a `nextPageToken` is present, the tool
+fetches the next page automatically (with a 2-second pause as required by
+Google), up to a maximum of 3 pages = 60 results per query.
 
 ### Deduplication
 
-Every place returned by the API has a unique `place_id`. The tool keeps a set of all seen place IDs in memory and only writes a lead to the CSV if its ID hasn't been seen before. This means a business that shows up in three neighboring counties under four different search queries is only recorded once.
-
-On resume, the existing CSV is read at startup to reload the seen-ID set, so deduplication remains accurate across multiple sessions.
-
-### Progress & resume
-
-After every county is fully processed, two things happen:
-1. Any new leads are appended to the CSV file on disk
-2. The progress state is saved to `.progress/{state}_progress.json`
-
-If the script stops for any reason — network error, power cut, Ctrl+C — simply re-run the exact same command. The tool will automatically detect the progress file, skip all already-completed counties, and pick up where it left off.
+Every Google Place has a unique `place_id`. Results are deduplicated in two
+passes:
+- **Within a grid point**: across all 3 queries, so a business found by multiple
+  queries is counted once
+- **Globally**: via SQLite `INSERT OR IGNORE` on `place_id` as the primary key,
+  so a business found at overlapping nearby grid points is stored once
 
 ---
 
 ## Resume / Fault Tolerance
 
-### Automatic resume
+Progress is stored in the `grid_points` table in SQLite after every grid point.
+If the script is interrupted for any reason — Ctrl+C, network error, power cut —
+simply re-run the same command. Grid points with `status='completed'` are skipped.
 
 ```bash
-# Run was interrupted at county 47 of 102
-python lead_scraper.py --state illinois
+# Run interrupted at point 412/835
+python grid_search.py
 
 # Output:
-# Resuming previous run. 46 counties already processed.
-# [47/102] Processing: ...
+# Added 0 new grid points to database.  (already populated)
+# Starting grid search: 423 pending points across MA, CT, NJ, PA, MI
+# [  413/835] ...
 ```
 
-### Force a fresh start
+To re-search already-completed points (e.g. to refresh stale data):
 
 ```bash
-python lead_scraper.py --state illinois --fresh
+python grid_search.py --refresh-days 90
 ```
-
-This deletes the progress checkpoint and overwrites the existing CSV.
-
-### Manual progress inspection
-
-Progress files are plain JSON and can be inspected directly:
-
-```bash
-cat .progress/illinois_progress.json
-```
-
-```json
-{
-  "completed": [
-    "Adams County",
-    "Alexander County",
-    "Bond County",
-    ...
-  ],
-  "output_file": "illinois_leads.csv"
-}
-```
-
-### Log file
-
-Every run appends to `lead_scraper.log` in the working directory. This file includes DEBUG-level detail (every individual query and page result) that is not shown on the console. Useful for diagnosing issues.
 
 ---
 
@@ -317,89 +329,56 @@ Every run appends to `lead_scraper.log` in the working directory. This file incl
 
 ### Pricing
 
-The **Google Places API (New) Text Search** is billed at approximately **$0.025 per request** (Basic tier, as of 2024). Google provides a **$200 monthly free credit** on all Maps Platform products, which covers:
+The **Google Places API (New) Text Search** charges approximately **$17 per 1,000
+requests** (Basic fields tier). Google provides a **$200/month free credit**:
 
-> $200 ÷ $0.025 = **8,000 free requests per month**
+> $200 ÷ $0.017 = **~11,700 free requests per month**
 
-### Estimated calls per state
+### Estimated calls for all 5 states
 
-| State | Counties | Queries/County | Min Calls | Paginated Est. |
-|---|---|---|---|---|
-| Illinois | 102 | 8 | 816 | ~1,200 |
-| Texas | 254 | 8 | 2,032 | ~3,000 |
-| California | 58 | 8 | 464 | ~700 |
-| New York | 62 | 8 | 496 | ~750 |
-| All 50 states | ~3,143 | 8 | ~25,144 | ~37,000 |
+| Scenario | API Calls | Cost (beyond free tier) |
+|---|---|---|
+| Best case (avg 1 page/query) | ~2,500 | $0 (within free tier) |
+| Realistic (avg 2 pages/query) | ~5,000 | $0 (within free tier) |
+| Worst case (3 pages every query) | ~7,515 | ~$0 (within free tier) |
 
-Most individual state runs comfortably fit within the free monthly tier. Running all 50 states in a single month may incur charges of **~$725** at the non-free rate, but in practice many rural counties will return few results with little pagination.
+All realistic runs for the 5 target states fit within Google's free monthly credit.
 
 ### Rate limit handling
 
-- Default delay between queries: **0.8 seconds**
-- On HTTP `429` (quota exceeded): automatic retry after 10s, 20s, 30s
+- Default delay between queries: **0.3 seconds**
+- On HTTP `429` (quota exceeded): automatic retry after 5s, 10s, 20s (3 attempts)
 - On HTTP `403` (key error): stops immediately with a clear error message
-- On network errors: retries 3 times with 3-second gaps
+- On network errors: retries 3 times with exponential back-off
 
-If you frequently see 429 errors, increase the delay:
+Increase delay if you see repeated 429 errors:
+
 ```bash
-python lead_scraper.py --state texas --delay 2.0
+python grid_search.py --delay 1.0
 ```
-
----
-
-## County Count by State
-
-For planning purposes — larger states take longer and use more API calls.
-
-| State | Counties | State | Counties |
-|---|---|---|---|
-| Texas | 254 | Missouri | 115 |
-| Georgia | 159 | Oklahoma | 77 |
-| Virginia | 133 | Iowa | 99 |
-| Kentucky | 120 | Illinois | 102 |
-| Kansas | 105 | Michigan | 83 |
-| North Carolina | 100 | Tennessee | 95 |
-| Ohio | 88 | Indiana | 92 |
-| Mississippi | 82 | Wisconsin | 72 |
-| Alabama | 67 | Pennsylvania | 67 |
-| California | 58 | New York | 62 |
-
-Small states like Rhode Island (5), Delaware (3), and Hawaii (5) complete in minutes.
 
 ---
 
 ## Troubleshooting
 
 ### `GOOGLE_PLACES_API_KEY not found`
-- Make sure you've created a `.env` file (not just `.env.example`)
-- The file must be in the same directory you're running the command from
-- Check for typos: the variable must be exactly `GOOGLE_PLACES_API_KEY`
+- Confirm you created `.env` (not just `.env.example`)
+- The file must be in the same directory you run the command from
+- The variable must be exactly `GOOGLE_PLACES_API_KEY`
 
 ### `Permission denied (403)`
-- Your API key may not have the **Places API (New)** enabled
-- Go to Google Cloud Console → APIs & Services → Library and confirm "Places API (New)" shows as **Enabled**
-- If you restricted the key to specific APIs, make sure "Places API (New)" is in the allowed list
-- Note: do NOT enable the legacy "Places API" — it uses a different endpoint
+- Confirm **Places API (New)** is enabled (not the legacy "Places API")
+- Confirm billing is set up on the Google Cloud project
+- If you restricted the key, make sure "Places API (New)" is in the allowed list
 
-### `Failed to fetch county data from Census Bureau`
-- The Census Bureau API is occasionally slow; try again in a few minutes
-- Check your internet connection
-- If the cached file exists but is corrupted, delete `data/{state}_counties.json` and retry
+### Results seem sparse
+- The 20-mile radius per point may not cover the full gap between grid points —
+  try `--radius 25000` to extend coverage
+- Some areas may genuinely have few listings on Google Maps
 
-### Results seem low / missing counties
-- Some rural counties may genuinely have zero insulation contractors
-- Try increasing queries by editing `SEARCH_QUERIES` in `lead_scraper.py` to add more terms like `"insulation contractor near me"` or `"rigid foam insulation"`
-- Businesses without a Google Maps listing will not appear — this is a limitation of the Places API
-
-### The script is running very slowly
-- This is expected for large states. Texas (254 counties) takes 2–3 hours at default speed
-- You can safely Ctrl+C and resume later — progress is saved after every county
-- Reduce the delay with `--delay 0.5` if you're not hitting rate limits
-
-### `Unknown state: 'xxx'`
-- Use the full English name of the state, not an abbreviation
-- Correct: `--state illinois`, `--state "new york"`, `--state "north carolina"`
-- Incorrect: `--state IL`, `--state NY`
+### Script is running slowly
+- This is normal — 835 points × 3 queries takes 1–2 hours at the default delay
+- You can safely Ctrl+C and resume at any time
 
 ---
 
@@ -407,29 +386,26 @@ Small states like Rhode Island (5), Delaware (3), and Hawaii (5) complete in min
 
 ```
 Api_leads/
-├── lead_scraper.py          # Main script — the only file you need to run
+├── grid_search.py           # Main script — the only file you need to run
 ├── requirements.txt         # Python dependencies (requests, python-dotenv)
 ├── .env.example             # Template — copy to .env and add your API key
-├── .env                     # Your API key (create this; never commit to git)
-├── lead_scraper.log         # Full debug log (created on first run)
+├── .env                     # Your API key (never commit this)
 │
-├── data/                    # Auto-created on first run
-│   └── illinois_counties.json    # Cached county list per state
+├── lib/
+│   ├── api_client.py        # Google Places API wrapper (retry, pagination)
+│   ├── database.py          # SQLite schema, grid point tracking, lead storage
+│   ├── exporter.py          # CSV export helpers
+│   └── __init__.py
 │
-├── .progress/               # Auto-created on first run
-│   └── illinois_progress.json    # Resume checkpoint per state
+├── grid_leads.db            # SQLite database (auto-created on first run)
 │
-└── illinois_leads.csv       # Output — created after first run
-```
-
-### Suggested `.gitignore` additions
-
-```gitignore
-.env
-data/
-.progress/
-*.csv
-*.log
+└── exports/                 # Auto-created on first run
+    ├── ma_leads.csv
+    ├── ct_leads.csv
+    ├── nj_leads.csv
+    ├── pa_leads.csv
+    ├── mi_leads.csv
+    └── all_leads_master.csv
 ```
 
 ---
