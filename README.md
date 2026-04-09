@@ -1,9 +1,10 @@
-# Grid Search Lead Generator — Home Insulation Contractors
+# Grid Search Lead Generator
 **Appointly Solutions** | Powered by Google Places API (New)
 
-A command-line tool that finds every home insulation contractor across any US state
+A command-line tool that finds local service businesses across any US state
 using a lat/lng grid search, then exports them to clean, deduplicated CSV files
-ready for outreach. All 50 states plus DC are supported.
+ready for outreach. All 50 states plus DC are supported. Search terms, states,
+and API credit usage are all fully configurable.
 
 ---
 
@@ -27,18 +28,13 @@ ready for outreach. All 50 states plus DC are supported.
 
 ## What It Does
 
-Target any US state — or any combination of states — by passing `--states` on the
-command line. The default run covers **MA, CT, NJ, PA, and MI** (cold-climate states
-with old housing stock and strong insulation demand), but any of the 50 states plus
-DC are fully supported. Instead of searching by ZIP code (which returns the same
-ranked results repeatedly), it:
+Target any US state — or any combination of states — and search for any type of
+business. The default run covers **MA, CT, NJ, PA, and MI** using insulation
+contractor queries, but every aspect is configurable:
 
 1. Lays a **uniform lat/lng grid** across each state — one search point every ~20 miles
 2. Applies a **denser 5-mile grid** over major metro areas for each selected state
-3. For **each grid point**, runs 3 targeted search queries against the Google Places API (New):
-   - `insulation contractor`
-   - `insulation`
-   - `spray foam insulation`
+3. For **each grid point**, runs your chosen search queries against the Google Places API (New)
 4. **Paginates** each query automatically (up to 3 pages × 20 results = 60 results per query)
 5. **Deduplicates** every result by Google Place ID — each business appears exactly once
 6. Saves progress in **SQLite** after every grid point — safe to interrupt and resume
@@ -193,6 +189,51 @@ python grid_search.py --states NY,NJ,CT,MA,VT,NH,ME
 
 All 50 US states and DC are supported (pass the two-letter abbreviation).
 
+### Search for any type of business with --queries
+
+Separate multiple terms with semicolons. Each term runs as its own Google Places search.
+
+```bash
+# Single term
+python grid_search.py --states TX --queries "roofing contractor"
+
+# Multiple terms
+python grid_search.py --states TX --queries "roofing contractor;roofer;roof repair"
+
+# Any industry
+python grid_search.py --states FL --queries "HVAC contractor;heating and cooling;AC repair"
+python grid_search.py --states CA --queries "solar panel installer;solar contractor"
+```
+
+When `--queries` is not provided, the defaults are used:
+- `insulation contractor`
+- `insulation`
+- `spray foam insulation`
+
+### Lite mode — ~20–70× fewer API calls
+
+Lite mode uses 1 page max, 30-mile grid spacing, and no dense metro sub-grid.
+Best for a quick first pass or when staying well within the free tier.
+
+```bash
+# Lite with default queries
+python grid_search.py --lite
+
+# Lite with custom queries and states
+python grid_search.py --states TX --lite --queries "roofing contractor;roofer"
+
+# Preview lite call count before running
+python grid_search.py --states TX --lite --dry-run
+```
+
+| | Full mode | Lite mode |
+|---|---|---|
+| Queries per point | 3 (default) | 1 (default) |
+| Pages per query | 3 max | 1 max |
+| Grid spacing | 20 mi | 30 mi |
+| Dense metro grid | yes | no |
+| Est. calls (MA + PA) | ~5,976 | ~88 |
+
 ### Export CSVs without making API calls
 
 ```bash
@@ -241,16 +282,19 @@ Exporting CSVs to exports/
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `--states` | string | `MA,CT,NJ,PA,MI` | Comma-separated state abbreviations to search — any of the 50 US states plus DC |
+| `--states` | string | `MA,CT,NJ,PA,MI` | Comma-separated state abbreviations — any of the 50 US states plus DC |
+| `--queries` | string | *(insulation defaults)* | Semicolon-separated search terms, e.g. `"roofer;roofing contractor"` |
+| `--lite` | flag | off | Lite mode: 1 query, 1 page max, 30 mi spacing, no dense metro grid (~20–70× fewer calls) |
 | `--spacing` | float | `20.0` | Base grid spacing in miles |
-| `--dense-spacing` | float | `10.0` | Grid spacing in miles for urban metro zones |
-| `--radius` | float | `20000` | Search radius per grid point in meters |
+| `--dense-spacing` | float | `5.0` | Grid spacing in miles for urban metro zones |
+| `--radius` | float | `20000` | Search radius per base grid point in meters |
+| `--dense-radius` | float | `10000` | Search radius per dense/metro grid point in meters |
 | `--refresh-days` | int | `0` | Re-search grid points older than N days (0 = never) |
 | `--export-only` | flag | off | Skip API calls, export CSVs from existing database |
 | `--export-dir` | string | `exports/` | Directory for output CSV files |
 | `--db-path` | string | `grid_leads.db` | SQLite database file path |
 | `--delay` | float | `0.3` | Seconds to wait between API queries |
-| `--dry-run` | flag | off | Print grid point counts per state and exit |
+| `--dry-run` | flag | off | Print grid point and estimated API call counts per state and exit |
 | `--state-summary` | flag | off | Print lead counts per state from database and exit |
 
 ---
@@ -286,14 +330,15 @@ for resume tracking.
 
 ### Search queries
 
-Three queries run per grid point:
+By default, three queries run per grid point:
 
 1. `insulation contractor` — catches full-service companies
 2. `insulation` — broader net for businesses that self-describe simply
 3. `spray foam insulation` — catches specialty contractors who may not appear in generic searches
 
-Different businesses use different terminology on Google Maps, so running all
-three queries significantly increases recall.
+Use `--queries` to replace these with any terms you like. Separate multiple terms
+with semicolons. Different businesses use different terminology on Google Maps, so
+running multiple related queries significantly increases recall.
 
 ### Pagination
 
@@ -345,17 +390,18 @@ requests** (Basic fields tier). Google provides a **$200/month free credit**:
 
 > $200 ÷ $0.017 = **~11,700 free requests per month**
 
-### Estimated calls by state selection
+### Estimated calls by mode and state selection
 
 | Scenario | API Calls | Cost (beyond free tier) |
 |---|---|---|
-| Default 5 states, best case | ~2,500 | $0 (within free tier) |
-| Default 5 states, realistic | ~5,000 | $0 (within free tier) |
-| Default 5 states, worst case | ~7,515 | ~$0 (within free tier) |
-| Large state like TX or CA | ~18,000–25,000 | May exceed free tier |
+| Default 5 states, full mode, realistic | ~5,000 | $0 (within free tier) |
+| Default 5 states, full mode, worst case | ~7,515 | ~$0 (within free tier) |
+| Default 5 states, **lite mode** | ~200–400 | $0 |
+| Large state (TX/CA), full mode | ~18,000–25,000 | May exceed free tier |
+| Large state (TX/CA), **lite mode** | ~500–800 | $0 |
 
-Use `--dry-run` before any large run to see the estimated API call count for your
-chosen states.
+Always run `--dry-run` before a large run to see the exact estimated call count
+for your chosen states, mode, and queries.
 
 ### Rate limit handling
 
@@ -392,6 +438,7 @@ python grid_search.py --delay 1.0
 ### Script is running slowly
 - This is normal — 835 points × 3 queries takes 1–2 hours at the default delay
 - You can safely Ctrl+C and resume at any time
+- Use `--lite` for a faster first pass, then run full mode to fill in gaps
 
 ---
 
