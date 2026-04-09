@@ -1,9 +1,9 @@
 # Grid Search Lead Generator — Home Insulation Contractors
 **Appointly Solutions** | Powered by Google Places API (New)
 
-A command-line tool that finds every home insulation contractor across 5 high-value
-Northeast/Midwest states using a lat/lng grid search, then exports them to clean,
-deduplicated CSV files ready for outreach.
+A command-line tool that finds every home insulation contractor across any US state
+using a lat/lng grid search, then exports them to clean, deduplicated CSV files
+ready for outreach. All 50 states plus DC are supported.
 
 ---
 
@@ -27,13 +27,14 @@ deduplicated CSV files ready for outreach.
 
 ## What It Does
 
-This tool covers **MA, CT, NJ, PA, and MI** — five cold-climate states with old
-housing stock and strong insulation demand. Instead of searching by ZIP code
-(which returns the same ranked results repeatedly), it:
+Target any US state — or any combination of states — by passing `--states` on the
+command line. The default run covers **MA, CT, NJ, PA, and MI** (cold-climate states
+with old housing stock and strong insulation demand), but any of the 50 states plus
+DC are fully supported. Instead of searching by ZIP code (which returns the same
+ranked results repeatedly), it:
 
 1. Lays a **uniform lat/lng grid** across each state — one search point every ~20 miles
-2. Applies a **denser 10-mile grid** over major metro areas (Boston, Hartford, New Haven,
-   Newark, Philadelphia, Pittsburgh, Detroit, Grand Rapids)
+2. Applies a **denser 5-mile grid** over major metro areas for each selected state
 3. For **each grid point**, runs 3 targeted search queries against the Google Places API (New):
    - `insulation contractor`
    - `insulation`
@@ -175,18 +176,22 @@ MI               443                   3,987
 TOTAL            835                   7,515
 ```
 
-### Run all 5 states
+### Run the default states (MA, CT, NJ, PA, MI)
 
 ```bash
 python grid_search.py
 ```
 
-### Run a single state
+### Run any state or combination of states
 
 ```bash
 python grid_search.py --states MA
 python grid_search.py --states PA,MI
+python grid_search.py --states TX,FL,CA
+python grid_search.py --states NY,NJ,CT,MA,VT,NH,ME
 ```
+
+All 50 US states and DC are supported (pass the two-letter abbreviation).
 
 ### Export CSVs without making API calls
 
@@ -236,7 +241,7 @@ Exporting CSVs to exports/
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `--states` | string | `MA,CT,NJ,PA,MI` | Comma-separated state abbreviations to search |
+| `--states` | string | `MA,CT,NJ,PA,MI` | Comma-separated state abbreviations to search — any of the 50 US states plus DC |
 | `--spacing` | float | `20.0` | Base grid spacing in miles |
 | `--dense-spacing` | float | `10.0` | Grid spacing in miles for urban metro zones |
 | `--radius` | float | `20000` | Search radius per grid point in meters |
@@ -259,8 +264,9 @@ points on a uniform grid. Latitude step is constant (`spacing_miles / 69`);
 longitude step varies by latitude to keep true distance spacing consistent
 (`spacing_miles / (69 × cos(lat))`).
 
-Urban metro areas get a denser sub-grid at half the base spacing. Metro zones
-are defined by center coordinates and radius:
+Urban metro areas get a denser sub-grid at the dense spacing (default 5 mi). Metro
+zones are defined by center coordinates and radius for every supported state. A
+few examples:
 
 | State | Metro zones |
 |-------|-------------|
@@ -269,6 +275,11 @@ are defined by center coordinates and radius:
 | NJ | Newark/NYC border (30 mi), Camden/Philadelphia border (25 mi) |
 | PA | Philadelphia (40 mi), Pittsburgh (35 mi) |
 | MI | Detroit (40 mi), Grand Rapids (20 mi) |
+| TX | Houston (40 mi), Dallas (40 mi), San Antonio (30 mi), Austin (30 mi) |
+| CA | Los Angeles (40 mi), San Francisco (30 mi), San Diego (30 mi), Sacramento (25 mi) |
+| NY | New York City (40 mi), Buffalo (25 mi), Rochester (20 mi), Albany (15 mi) |
+| FL | Miami (35 mi), Orlando (30 mi), Tampa (30 mi), Jacksonville (25 mi) |
+| … | All 50 states + DC have pre-configured metro zones |
 
 Each point gets a stable ID (`STATE_lat_lng`, e.g. `MA_42.3600_-71.0600`) used
 for resume tracking.
@@ -334,15 +345,17 @@ requests** (Basic fields tier). Google provides a **$200/month free credit**:
 
 > $200 ÷ $0.017 = **~11,700 free requests per month**
 
-### Estimated calls for all 5 states
+### Estimated calls by state selection
 
 | Scenario | API Calls | Cost (beyond free tier) |
 |---|---|---|
-| Best case (avg 1 page/query) | ~2,500 | $0 (within free tier) |
-| Realistic (avg 2 pages/query) | ~5,000 | $0 (within free tier) |
-| Worst case (3 pages every query) | ~7,515 | ~$0 (within free tier) |
+| Default 5 states, best case | ~2,500 | $0 (within free tier) |
+| Default 5 states, realistic | ~5,000 | $0 (within free tier) |
+| Default 5 states, worst case | ~7,515 | ~$0 (within free tier) |
+| Large state like TX or CA | ~18,000–25,000 | May exceed free tier |
 
-All realistic runs for the 5 target states fit within Google's free monthly credit.
+Use `--dry-run` before any large run to see the estimated API call count for your
+chosen states.
 
 ### Rate limit handling
 
@@ -400,12 +413,10 @@ Api_leads/
 ├── grid_leads.db            # SQLite database (auto-created on first run)
 │
 └── exports/                 # Auto-created on first run
-    ├── ma_leads.csv
+    ├── ma_leads.csv         # One CSV per state searched (e.g. tx_leads.csv, ca_leads.csv)
     ├── ct_leads.csv
-    ├── nj_leads.csv
-    ├── pa_leads.csv
-    ├── mi_leads.csv
-    └── all_leads_master.csv
+    ├── ...
+    └── all_leads_master.csv # Combined master CSV across all searched states
 ```
 
 ---
