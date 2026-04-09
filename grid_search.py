@@ -50,6 +50,14 @@ GRID_SEARCH_QUERIES = [
     "insulation",
     "spray foam insulation",
 ]
+DEFAULT_MAX_PAGES = 3  # mirrors api_client.MAX_PAGES
+
+# Lite mode — reduces API calls by ~20× vs full mode:
+#   1 query instead of 3, 1 page instead of 3, wider spacing, no dense grid.
+LITE_QUERIES = ["insulation contractor"]
+LITE_MAX_PAGES = 1
+LITE_SPACING_MILES = 30.0
+LITE_DENSE_SPACING_MILES = 30.0  # same as base = effectively no dense grid
 
 # Bounding boxes for all 50 US states + DC
 STATE_BBOXES: Dict[str, Dict[str, float]] = {
@@ -339,6 +347,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--state-summary", action="store_true",
         help="Print lead counts per state from the database and exit",
     )
+    p.add_argument(
+        "--lite", action="store_true",
+        help=(
+            "Lite mode: ~20× fewer API calls. "
+            "Uses 1 query ('insulation contractor'), 1 page max, "
+            f"{LITE_SPACING_MILES}-mile spacing, and no dense metro grid. "
+            "Good for a quick first pass or budget-constrained runs."
+        ),
+    )
     return p
 
 
@@ -352,6 +369,22 @@ def main() -> None:
 
     args = _build_parser().parse_args()
     states = [s.strip().upper() for s in args.states.split(",") if s.strip()]
+
+    # Apply lite mode defaults (only if the user didn't explicitly override them)
+    if args.lite:
+        queries = LITE_QUERIES
+        max_pages = LITE_MAX_PAGES
+        if args.spacing == DEFAULT_SPACING_MILES:
+            args.spacing = LITE_SPACING_MILES
+        if args.dense_spacing == DEFAULT_DENSE_SPACING_MILES:
+            args.dense_spacing = LITE_DENSE_SPACING_MILES
+        log.info(
+            "Lite mode enabled — 1 query, 1 page max, "
+            f"{args.spacing:.0f} mi spacing, no dense metro grid."
+        )
+    else:
+        queries = GRID_SEARCH_QUERIES
+        max_pages = DEFAULT_MAX_PAGES
 
     # Validate states
     unknown = [s for s in states if s not in STATE_BBOXES]
@@ -402,18 +435,20 @@ def main() -> None:
     # --dry-run: print counts and exit
     # ----------------------------------------------------------------
     if args.dry_run:
-        print(f"\n{'State':<6}  {'Grid Points':>12}  {'Est. API Calls (max)':>22}")
-        print("-" * 44)
+        mode_label = "LITE MODE" if args.lite else "full mode"
+        print(f"\n{'State':<6}  {'Grid Points':>12}  {'Est. API Calls (max)':>22}  ({mode_label})")
+        print("-" * 54)
         for state in states:
             pts = [p for p in all_points if p["state"] == state]
-            est = len(pts) * len(GRID_SEARCH_QUERIES) * 3  # 3 pages worst-case
+            est = len(pts) * len(queries) * max_pages
             print(f"{state:<6}  {len(pts):>12,}  {est:>22,}")
         total = len(all_points)
-        est_total = total * len(GRID_SEARCH_QUERIES) * 3
-        print("-" * 44)
+        est_total = total * len(queries) * max_pages
+        print("-" * 54)
         print(f"{'TOTAL':<6}  {total:>12,}  {est_total:>22,}")
         print(f"\nBase:  {args.spacing} mi spacing, {args.radius:,.0f} m radius")
-        print(f"Dense: {args.dense_spacing} mi spacing, {args.dense_radius:,.0f} m radius\n")
+        print(f"Dense: {args.dense_spacing} mi spacing, {args.dense_radius:,.0f} m radius")
+        print(f"Queries per point: {len(queries)}  |  Max pages per query: {max_pages}\n")
         return
 
     # ----------------------------------------------------------------
@@ -497,8 +532,9 @@ def main() -> None:
                     point["point_id"],
                     point["latitude"],
                     point["longitude"],
-                    queries=GRID_SEARCH_QUERIES,
+                    queries=queries,
                     radius_meters=radius,
+                    max_pages=max_pages,
                 )
             except PermissionError as exc:
                 log.error(f"Permission error — aborting:\n{exc}")

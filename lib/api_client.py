@@ -116,9 +116,10 @@ class PlacesAPIClient:
         latitude: float,
         longitude: float,
         radius_meters: float,
+        max_pages: int = MAX_PAGES,
     ) -> Tuple[List[Dict], int]:
         """
-        Run one textQuery with location bias and paginate up to MAX_PAGES.
+        Run one textQuery with location bias and paginate up to max_pages.
         Returns (places, api_call_count).
         """
         all_places: List[Dict] = []
@@ -135,7 +136,7 @@ class PlacesAPIClient:
             },
         }
 
-        for _ in range(MAX_PAGES):
+        for _ in range(max_pages):
             response = self._post(body)
             call_count += 1
 
@@ -191,6 +192,7 @@ class PlacesAPIClient:
         longitude: float,
         queries: List[str],
         radius_meters: float = 20_000,
+        max_pages: int = MAX_PAGES,
     ) -> Tuple[List[Dict], int]:
         """
         Run multiple textQuery searches centred on a lat/lng grid point.
@@ -206,7 +208,7 @@ class PlacesAPIClient:
 
         for query in queries:
             places, calls = self._search_single_query(
-                query, point_id, latitude, longitude, radius_meters
+                query, point_id, latitude, longitude, radius_meters, max_pages
             )
             total_calls += calls
             for place in places:
