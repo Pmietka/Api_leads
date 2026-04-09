@@ -356,6 +356,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "Good for a quick first pass or budget-constrained runs."
         ),
     )
+    p.add_argument(
+        "--queries",
+        default=None,
+        metavar="TERMS",
+        help=(
+            "Semicolon-separated list of custom search terms to use instead of the defaults. "
+            "Example: --queries \"roofing contractor;roofer;roof repair\". "
+            "Works in both full and lite mode (lite page/spacing limits still apply)."
+        ),
+    )
     return p
 
 
@@ -370,7 +380,7 @@ def main() -> None:
     args = _build_parser().parse_args()
     states = [s.strip().upper() for s in args.states.split(",") if s.strip()]
 
-    # Apply lite mode defaults (only if the user didn't explicitly override them)
+    # Resolve search queries and page limit
     if args.lite:
         queries = LITE_QUERIES
         max_pages = LITE_MAX_PAGES
@@ -378,13 +388,22 @@ def main() -> None:
             args.spacing = LITE_SPACING_MILES
         if args.dense_spacing == DEFAULT_DENSE_SPACING_MILES:
             args.dense_spacing = LITE_DENSE_SPACING_MILES
-        log.info(
-            "Lite mode enabled — 1 query, 1 page max, "
-            f"{args.spacing:.0f} mi spacing, no dense metro grid."
-        )
     else:
         queries = GRID_SEARCH_QUERIES
         max_pages = DEFAULT_MAX_PAGES
+
+    # --queries overrides the default list for both full and lite mode
+    if args.queries:
+        queries = [q.strip() for q in args.queries.split(";") if q.strip()]
+        if not queries:
+            log.error("--queries was provided but contained no valid terms after parsing.")
+            sys.exit(1)
+
+    mode_label = "lite" if args.lite else "full"
+    log.info(
+        f"Mode: {mode_label} | queries: {queries} | max pages: {max_pages} | "
+        f"spacing: {args.spacing} mi"
+    )
 
     # Validate states
     unknown = [s for s in states if s not in STATE_BBOXES]
