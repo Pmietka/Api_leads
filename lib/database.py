@@ -46,6 +46,7 @@ def init_db(db_path: str) -> None:
 
             CREATE TABLE IF NOT EXISTS leads (
                 place_id          TEXT PRIMARY KEY,
+                niche             TEXT NOT NULL DEFAULT 'general',
                 business_name     TEXT,
                 phone             TEXT,
                 website           TEXT,
@@ -72,6 +73,17 @@ def init_db(db_path: str) -> None:
             CREATE INDEX IF NOT EXISTS idx_leads_zip        ON leads(zip_code);
             CREATE INDEX IF NOT EXISTS idx_zip_state_status ON zip_searches(state, status);
         """)
+    # Migrate existing databases that don't yet have the niche column
+    try:
+        conn.execute("ALTER TABLE leads ADD COLUMN niche TEXT NOT NULL DEFAULT 'general'")
+        conn.commit()
+    except Exception:
+        pass  # Column already exists — nothing to do
+    # Create niche index after ensuring the column exists
+    with conn:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_leads_niche ON leads(niche)"
+        )
     conn.close()
 
 
@@ -176,12 +188,13 @@ def upsert_lead(db_path: str, lead: Dict) -> bool:
         cur = conn.execute(
             """
             INSERT OR IGNORE INTO leads
-                (place_id, business_name, phone, website, formatted_address,
+                (place_id, niche, business_name, phone, website, formatted_address,
                  city, state, zip_code, rating, review_count, source_zip)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 lead.get("place_id"),
+                lead.get("niche", "general"),
                 lead.get("business_name"),
                 lead.get("phone"),
                 lead.get("website"),
@@ -237,6 +250,48 @@ def get_states_with_leads(db_path: str) -> List[str]:
     conn = _connect(db_path)
     rows = conn.execute(
         "SELECT DISTINCT state FROM leads WHERE state IS NOT NULL ORDER BY state"
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def get_niches_with_leads(db_path: str) -> List[str]:
+    """Return a list of distinct niche values that have at least one lead."""
+    conn = _connect(db_path)
+    rows = conn.execute(
+        "SELECT DISTINCT niche FROM leads WHERE niche IS NOT NULL ORDER BY niche"
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def get_leads_by_niche(db_path: str, niche: str) -> List[Dict]:
+    """Return all leads for the given niche, ordered by state then business name."""
+    conn = _connect(db_path)
+    rows = conn.execute(
+        "SELECT * FROM leads WHERE niche = ? ORDER BY state, business_name", (niche,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_leads_by_niche_and_state(db_path: str, niche: str, state: str) -> List[Dict]:
+    """Return all leads for the given niche and state, ordered by business name."""
+    conn = _connect(db_path)
+    rows = conn.execute(
+        "SELECT * FROM leads WHERE niche = ? AND state = ? ORDER BY business_name",
+        (niche, state),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_states_with_leads_for_niche(db_path: str, niche: str) -> List[str]:
+    """Return distinct states that have leads for the given niche."""
+    conn = _connect(db_path)
+    rows = conn.execute(
+        "SELECT DISTINCT state FROM leads WHERE niche = ? AND state IS NOT NULL ORDER BY state",
+        (niche,),
     ).fetchall()
     conn.close()
     return [r[0] for r in rows]

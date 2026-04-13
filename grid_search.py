@@ -227,6 +227,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"Polite delay between API queries in seconds (default: {DEFAULT_DELAY})",
     )
     p.add_argument(
+        "--niche", default="general", metavar="NAME",
+        help="Niche label for this scraping run (e.g. 'home insulation', "
+             "'epoxy coatings').  Leads are tagged with this value so each "
+             "niche gets its own folder when exporting (default: general)",
+    )
+    p.add_argument(
         "--dry-run", action="store_true",
         help="Print grid point counts per state and exit without making API calls",
     )
@@ -399,9 +405,10 @@ def main() -> None:
                 mark_grid_point_searched(args.db_path, point["point_id"], 0, 0, error=str(exc))
                 continue
 
-            # Persist leads
+            # Persist leads (tag with the niche for this run)
             new_for_point = 0
             for place in places:
+                place["niche"] = args.niche
                 if upsert_lead(args.db_path, place):
                     new_for_point += 1
 
